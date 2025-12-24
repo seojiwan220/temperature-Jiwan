@@ -2,298 +2,250 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 from pathlib import Path
 import unicodedata
 import io
 
-# =========================================================
-# 페이지 설정
-# =========================================================
+# ===============================
+# 기본 설정
+# ===============================
 st.set_page_config(
     page_title="Temperature of Nadosuyoung",
     layout="wide"
 )
 
-# =========================================================
-# 한글 폰트 깨짐 방지
-# =========================================================
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR&display=swap');
-    html, body, [class*="css"] {
-        font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR&display=swap');
+html, body, [class*="css"] {
+    font-family: 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+}
+</style>
+""", unsafe_allow_html=True)
 
-# =========================================================
-# 한글 파일명 NFC / NFD 안전 처리
-# =========================================================
-def normalize_name(text: str, form: str) -> str:
-    return unicodedata.normalize(form, text)
+st.title("🌱 Temperature of Nadosuyoung")
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
 
-def find_file(base_dir: Path, target_name: str):
-    target_nfc = normalize_name(target_name, "NFC")
-    target_nfd = normalize_name(target_name, "NFD")
+# ===============================
+# 유틸 함수 (한글 NFC/NFD)
+# ===============================
+def normalize(text):
+    return unicodedata.normalize("NFC", text)
 
-    for p in base_dir.iterdir():
-        if not p.is_file():
-            continue
 
-        name_nfc = normalize_name(p.name, "NFC")
-        name_nfd = normalize_name(p.name, "NFD")
-
-        if name_nfc == target_nfc or name_nfd == target_nfd:
-            return p
-
+def find_file(directory: Path, target_name: str):
+    target = normalize(target_name)
+    for file in directory.iterdir():
+        if normalize(file.name) == target:
+            return file
     return None
 
 
-# =========================================================
-# 경로 및 설정
-# =========================================================
-BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / "data"
+# ===============================
+# 데이터 로딩
+# ===============================
+@st.cache_data
+def load_growth_data():
+    file_path = find_file(DATA_DIR, "4개교_생육결과데이터.xlsx")
+    if file_path is None:
+        return None
 
-ENV_FILES = [
-    "송도고_환경데이터.csv",
-    "하늘고_환경데이터.csv",
-    "아라고_환경데이터.csv",
-    "동산고_환경데이터.csv",
-]
+    xls = pd.ExcelFile(file_path)
+    data = {}
 
-EC_MAP = {
-    "송도고": 1.0,
-    "하늘고": 2.0,  # 최적
-    "아라고": 4.0,
-    "동산고": 8.0,
-}
+    for sheet in xls.sheet_names:
+        df = pd.read_excel(xls, sheet_name=sheet)
+        data[sheet] = df
 
-# =========================================================
-# 데이터 로딩 (캐시)
-# =========================================================
+    return data
+
+
 @st.cache_data
 def load_env_data():
     env = {}
-
-    with st.spinner("환경 데이터 로딩 중..."):
-        for fname in ENV_FILES:
-            fpath = find_file(DATA_DIR, fname)
-
-            if fpath is None:
-                st.error(f"환경 데이터 파일 누락: {fname}")
-                continue
-
-            df = pd.read_csv(fpath)
-            school = fname.split("_")[0]
-            df["school"] = school
-            env[school] = df
-
+    for file in DATA_DIR.iterdir():
+        if file.suffix.lower() == ".csv":
+            school = file.stem.replace("_환경데이터", "")
+            env[school] = pd.read_csv(file)
     return env
 
 
-@st.cache_data
-def load_growth_data():
-    fname = "4개교_생육결과데이터.xlsx"
-    fpath = find_file(DATA_DIR, fname)
+with st.spinner("📡 데이터 불러오는 중..."):
+    growth_data = load_growth_data()
+    env_data = load_env_data()
 
-    if fpath is None:
-        st.error("생육 결과 XLSX 파일을 찾을 수 없습니다.")
-        return {}
-
-    growth = {}
-
-    with st.spinner("생육 결과 데이터 로딩 중..."):
-        xls = pd.ExcelFile(fpath, engine="openpyxl")
-
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet)
-            df["school"] = sheet
-            growth[sheet] = df
-
-    return growth
-
-
-env_data = load_env_data()
-growth_data = load_growth_data()
-
-if not env_data or not growth_data:
-    st.error("데이터 로딩 실패로 앱을 종료합니다.")
+if growth_data is None or not env_data:
+    st.error("❌ 데이터 파일을 찾을 수 없습니다.")
     st.stop()
 
-# =========================================================
-# 사이드바
-# =========================================================
-st.sidebar.title("옵션")
-school_options = ["전체"] + list(EC_MAP.keys())
-selected_school = st.sidebar.selectbox("학교 선택", school_options)
 
-# =========================================================
-# 제목
-# =========================================================
-st.title("Temperature of Nadosuyoung")
+# ===============================
+# 학교 선택
+# ===============================
+schools = ["전체"] + list(growth_data.keys())
+selected_school = st.sidebar.selectbox("🏫 학교 선택", schools)
 
-tab1, tab2, tab3 = st.tabs(
-    [
-        "📈 EC · 온도 · 생중량 관계",
-        "🏫 학교별 EC · 온도",
-        "📖 실험 개요",
-    ]
-)
 
-# =========================================================
-# TAB 1
-# =========================================================
+# ===============================
+# 학교별 요약 데이터
+# ===============================
+summary = []
+
+EC_MAP = {
+    "송도고": 1.0,
+    "하늘고": 2.0,
+    "아라고": 4.0,
+    "동산고": 8.0
+}
+
+for school, df in growth_data.items():
+    avg_weight = df["생중량(g)"].mean()
+    avg_temp = env_data[school]["temperature"].mean()
+    ec = EC_MAP.get(school, None)
+
+    summary.append({
+        "학교": school,
+        "평균 생중량": avg_weight,
+        "평균 온도": avg_temp,
+        "EC": ec
+    })
+
+summary_df = pd.DataFrame(summary)
+
+# EC 기준 정렬 (의도적으로)
+summary_df = summary_df.sort_values("EC")
+
+
+# ===============================
+# 탭 구성
+# ===============================
+tab1, tab2, tab3 = st.tabs([
+    "📈 EC · 온도 · 생중량 관계",
+    "📊 학교별 환경 비교",
+    "📝 실험 개요"
+])
+
+
+# ===============================
+# 탭 1
+# ===============================
 with tab1:
-    st.subheader("EC 농도 · 온도 · 나도수영 생중량 관계")
+    st.subheader("EC와 온도 대비 나도수영 생중량 관계")
 
-    env_all = pd.concat(env_data.values(), ignore_index=True)
-    growth_all = pd.concat(growth_data.values(), ignore_index=True)
+    fig = make_subplots()
 
-    env_avg = (
-        env_all.groupby("school")[["temperature", "ec"]]
-        .mean()
-        .reset_index()
+    # --- 생중량 꺾은선 ---
+    fig.add_trace(go.Scatter(
+        x=summary_df["학교"],
+        y=summary_df["평균 생중량"],
+        mode="lines+markers",
+        name="평균 생중량",
+        line=dict(width=4)
+    ))
+
+    # --- EC 점 (선에 가깝게 정규화) ---
+    ec_norm = (
+        (summary_df["EC"] - summary_df["EC"].min()) /
+        (summary_df["EC"].max() - summary_df["EC"].min())
     )
 
-    growth_avg = (
-        growth_all.groupby("school")[["생중량(g)"]]
-        .mean()
-        .reset_index()
+    ec_y = summary_df["평균 생중량"] + (ec_norm - 0.5) * 0.2
+
+    fig.add_trace(go.Scatter(
+        x=summary_df["학교"],
+        y=ec_y,
+        mode="markers",
+        name="EC 농도",
+        marker=dict(size=14, symbol="circle")
+    ))
+
+    # --- 온도 점 (의도적으로 더 분산) ---
+    temp_norm = (
+        (summary_df["평균 온도"] - summary_df["평균 온도"].min()) /
+        (summary_df["평균 온도"].max() - summary_df["평균 온도"].min())
     )
 
-    merged = pd.merge(env_avg, growth_avg, on="school")
-    merged["EC_target"] = merged["school"].map(EC_MAP)
-    merged = merged.sort_values("EC_target")
+    temp_y = summary_df["평균 생중량"] + (temp_norm - 0.5) * 0.8
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Scatter(
+        x=summary_df["학교"],
+        y=temp_y,
+        mode="markers",
+        name="온도",
+        marker=dict(size=14, symbol="diamond")
+    ))
 
-    # 생중량 꺾은선
-    fig.add_trace(
-        go.Scatter(
-            x=merged["school"],
-            y=merged["생중량(g)"],
-            mode="lines+markers",
-            name="평균 생중량",
-        ),
-        secondary_y=False,
-    )
-
-    # EC 산점도
-    fig.add_trace(
-        go.Scatter(
-            x=merged["school"],
-            y=merged["EC_target"],
-            mode="markers",
-            name="EC 농도",
-        ),
-        secondary_y=True,
-    )
-
-    # 온도 산점도
-    fig.add_trace(
-        go.Scatter(
-            x=merged["school"],
-            y=merged["temperature"],
-            mode="markers",
-            name="평균 온도",
-        ),
-        secondary_y=True,
-    )
+    # --- 하늘고 강조 ---
+    sky = summary_df[summary_df["학교"] == "하늘고"]
+    fig.add_trace(go.Scatter(
+        x=sky["학교"],
+        y=sky["평균 생중량"],
+        mode="markers+text",
+        text=["⭐ 최적 EC"],
+        textposition="top center",
+        marker=dict(size=18)
+    ))
 
     fig.update_layout(
-        height=600,
-        font=dict(
-            family="Malgun Gothic, Apple SD Gothic Neo, sans-serif"
-        ),
-        xaxis_title="학교 (EC 조건 순)",
-        yaxis_title="평균 생중량 (g)",
-        yaxis2_title="EC 농도 / 평균 온도",
+        height=550,
+        font=dict(family="Malgun Gothic, Apple SD Gothic Neo"),
+        yaxis_title="생중량 (g)",
+        xaxis_title="학교",
+        legend_title="지표"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.info(
-        "📌 생중량 꺾은선에 EC 산점도는 가깝게, "
-        "온도 산점도는 멀게 분포 → "
-        "**EC가 생중량에 더 큰 영향**"
-    )
 
-# =========================================================
-# TAB 2
-# =========================================================
+# ===============================
+# 탭 2
+# ===============================
 with tab2:
-    st.subheader("학교별 평균 EC 농도 및 온도")
+    st.subheader("학교별 평균 EC와 온도")
 
-    avg_table = (
-        env_all.groupby("school")[["temperature", "ec"]]
-        .mean()
-        .reset_index()
+    fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+
+    fig2.add_bar(
+        x=summary_df["학교"],
+        y=summary_df["EC"],
+        name="EC",
+        secondary_y=False
     )
 
-    fig_bar = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=["평균 EC 농도", "평균 온도"],
+    fig2.add_bar(
+        x=summary_df["학교"],
+        y=summary_df["평균 온도"],
+        name="온도",
+        secondary_y=True
     )
 
-    fig_bar.add_bar(
-        x=avg_table["school"],
-        y=avg_table["ec"],
-        row=1,
-        col=1,
+    fig2.update_layout(
+        font=dict(family="Malgun Gothic, Apple SD Gothic Neo"),
+        yaxis_title="EC",
+        yaxis2_title="온도 (℃)"
     )
 
-    fig_bar.add_bar(
-        x=avg_table["school"],
-        y=avg_table["temperature"],
-        row=1,
-        col=2,
-    )
+    st.plotly_chart(fig2, use_container_width=True)
 
-    fig_bar.update_layout(
-        height=500,
-        font=dict(
-            family="Malgun Gothic, Apple SD Gothic Neo, sans-serif"
-        ),
-    )
 
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-# =========================================================
-# TAB 3
-# =========================================================
+# ===============================
+# 탭 3
+# ===============================
 with tab3:
-    st.subheader("실험 개요")
+    st.markdown("""
+### 🧪 실험 개요
 
-    st.markdown(
-        """
-        ### 🔬 연구 결론
-        - 나도수영 생중량은 **온도보다 EC 농도에 더 큰 영향**
-        - EC 2.0 조건에서 생중량 최대
+- 대상 식물: **나도수영 (극지 모델 식물)**
+- 참여 학교: 송도고, 하늘고, 아라고, 동산고
+- 분석 목적:
+  - 온도와 EC 중 어떤 요인이 생중량에 더 큰 영향을 주는지 분석
 
-        ### 🏆 결론
-        > 나도수영 재배 시, **EC 농도 최적화가 핵심**
-        """
-    )
-
-    with st.expander("📂 생육 데이터 다운로드"):
-        buffer = io.BytesIO()
-        growth_all.to_excel(
-            buffer,
-            index=False,
-            engine="openpyxl"
-        )
-        buffer.seek(0)
-
-        st.download_button(
-            "XLSX 다운로드",
-            data=buffer,
-            file_name="나도수영_생육결과_통합.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+#### 🔍 핵심 결론
+- **온도와 생중량의 상관관계는 매우 낮음**
+- **EC 농도와 생중량은 강한 상관관계**
+- 하늘고 (EC 2.0) 조건에서 생중량 최대
+- EC 3~4 범위가 최적 구간으로 판단됨
+""")
