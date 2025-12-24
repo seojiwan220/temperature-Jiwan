@@ -1,4 +1,57 @@
-import streamlit as st
+with tab1:
+    st.subheader("EC 농도 · 온도 · 나도수영 생중량 관계")
+
+    env_all = pd.concat(env_data.values(), ignore_index=True)
+    growth_all = pd.concat(growth_data.values(), ignore_index=True)
+
+    env_avg = (
+        env_all
+        .groupby("school")[["temperature", "ec"]]
+        .mean()
+        .reset_index()
+    )
+
+    growth_avg = (
+        growth_all
+        .groupby("school")[["생중량(g)"]]
+        .mean()
+        .reset_index()
+    )
+
+    merged = pd.merge(env_avg, growth_avg, on="school")
+    merged["EC_target"] = merged["school"].map(EC_MAP)
+
+    # EC 값 기준으로 정렬 (선형 관계 시각화 목적)
+    merged = merged.sort_values("EC_target")
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # 🔵 1) 생중량 꺾은선 그래프
+    fig.add_trace(
+        go.Scatter(
+            x=merged["school"],
+            y=merged["생중량(g)"],
+            mode="lines+markers",
+            name="평균 생중량",
+            line=dict(width=3),
+            marker=dict(size=8)
+        ),
+        secondary_y=False
+    )
+
+    # 🔴 2) EC 농도 산점도 (선 위에 찍힘)
+    fig.add_trace(
+        go.Scatter(
+            x=merged["school"],
+            y=merged["EC_target"],
+            mode="markers",
+            name="EC 농도",
+            marker=dict(size=12, symbol="circle-open")
+        ),
+        secondary_y=True
+    )
+
+  import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -17,7 +70,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# 한글 폰트 깨짐 방지 (Streamlit UI)
+# 한글 폰트 깨짐 방지
 # =========================================================
 st.markdown("""
 <style>
@@ -48,7 +101,7 @@ def find_file(base_dir: Path, target_name: str):
     return None
 
 # =========================================================
-# 경로
+# 경로 및 설정
 # =========================================================
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
@@ -128,7 +181,7 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # =========================================================
-# TAB 1 : EC + 온도 + 생중량 융합 그래프
+# TAB 1 : 생중량(꺾은선) + EC·온도(산점도)
 # =========================================================
 with tab1:
     st.subheader("EC 농도 · 온도 · 나도수영 생중량 관계")
@@ -152,37 +205,51 @@ with tab1:
 
     merged = pd.merge(env_avg, growth_avg, on="school")
     merged["EC_target"] = merged["school"].map(EC_MAP)
+    merged = merged.sort_values("EC_target")
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # 산점도 (생중량)
+    # 생중량 꺾은선
     fig.add_trace(
         go.Scatter(
-            x=merged["ec"],
+            x=merged["school"],
             y=merged["생중량(g)"],
-            mode="markers+text",
-            text=merged["school"],
+            mode="lines+markers",
             name="평균 생중량",
-            marker=dict(size=14)
+            line=dict(width=3),
+            marker=dict(size=8)
         ),
         secondary_y=False
     )
 
-    # 꺾은선 (온도)
+    # EC 농도 산점도
     fig.add_trace(
         go.Scatter(
-            x=merged["ec"],
+            x=merged["school"],
+            y=merged["EC_target"],
+            mode="markers",
+            name="EC 농도",
+            marker=dict(size=12, symbol="circle-open")
+        ),
+        secondary_y=True
+    )
+
+    # 온도 산점도
+    fig.add_trace(
+        go.Scatter(
+            x=merged["school"],
             y=merged["temperature"],
-            mode="lines+markers",
-            name="평균 온도"
+            mode="markers",
+            name="평균 온도",
+            marker=dict(size=12, symbol="diamond")
         ),
         secondary_y=True
     )
 
     fig.update_layout(
-        xaxis_title="EC 농도",
+        xaxis_title="학교 (EC 조건 순)",
         yaxis_title="평균 생중량 (g)",
-        yaxis2_title="평균 온도 (℃)",
+        yaxis2_title="EC 농도 / 평균 온도",
         font=dict(family="Malgun Gothic, Apple SD Gothic Neo, sans-serif"),
         height=600
     )
@@ -190,8 +257,10 @@ with tab1:
     st.plotly_chart(fig, use_container_width=True)
 
     st.info(
-        "📌 **분석 결과**: 나도수영의 생중량은 **온도와의 상관관계가 매우 낮으며**, "
-        "**EC 농도의 변화가 생중량에 더 큰 영향을 미침**"
+        "📌 **해석 방법**\n"
+        "- 생중량 꺾은선에 가까울수록 상관관계가 높음\n"
+        "- EC 산점도는 선에 가깝게 분포 → **EC가 생중량에 큰 영향**\n"
+        "- 온도 산점도는 선과 거리 큼 → **온도 영향 미미**"
     )
 
 # =========================================================
@@ -241,20 +310,20 @@ with tab3:
 
     st.markdown("""
 ### 🔬 연구 목적
-- 극지 환경에서 **나도수영 생육에 가장 적합한 EC 농도 조건**을 도출
-- 온도 요인과 EC 요인의 상대적 영향력 비교
+- 나도수영 생육에 영향을 미치는 환경 요인 분석
+- 온도 대비 **EC 농도의 상대적 영향력 규명**
 
 ### 🧪 실험 설계
-- 4개 학교에서 서로 다른 EC 농도 조건으로 재배
-- 동일 종(나도수영)을 사용하여 생중량, 잎 수, 길이 측정
+- 4개 학교에서 서로 다른 EC 조건으로 재배
+- 생중량을 주요 지표로 사용
 
-### 📊 핵심 결론
-- **온도와 생중량 간 상관관계는 매우 낮음**
-- **EC 농도가 생중량에 미치는 영향이 지배적**
-- **EC 2.0 (하늘고)** 조건에서 생중량 최대 → **최적 EC**
+### 📊 핵심 결과
+- 온도와 생중량 간 상관관계는 매우 낮음
+- EC 농도가 생중량 변화와 강한 연관성
+- **EC 2.0 (하늘고)** 조건에서 생중량 최대
 
 ### 🏆 결론
-> 나도수영 재배 시, 온도 조절보다 **EC 농도 최적화가 생육 향상에 핵심적**
+> 나도수영 생육에는 온도보다 **EC 농도 최적화가 핵심 요인**
 """)
 
     with st.expander("📂 생육 데이터 다운로드"):
